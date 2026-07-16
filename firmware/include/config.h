@@ -18,6 +18,12 @@
   #define OLED_HEIGHT       64
   #define OLED_I2C_ADDR     0x3C
   #define OLED_ROTATION     2    // 0=none, 1=90°, 2=180°, 3=270°
+  // Rotary encoder with push-button switch. Drives an on-device menu shown on
+  // the OLED: turning scrolls the selection, pressing runs it.
+  #define HAS_ENCODER
+  #define PIN_ENC_A         17   // D7  (header pin 14) quadrature channel A
+  #define PIN_ENC_B         22   // D4  (header pin 5)  quadrature channel B
+  #define PIN_ENC_SW        23   // D5  (header pin 6)  push-button (active low)
 #elif defined(BOARD_ESP32_DEVKIT)
   // ESP32 DevKit (power + volume-down only)
   #define PIN_SERVO_POWER   13

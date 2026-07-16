@@ -202,6 +202,132 @@ static void cmdStatus() {
 #endif
 }
 
+// ── Rotary encoder + on-device menu ─────────────────────────────────────
+#ifdef HAS_ENCODER
+// Full-step quadrature decoder (Ben Buxton state table). Each ISR reads both
+// channels and advances a state machine; a valid detent emits DIR_CW/DIR_CCW
+// while contact bounce and partial steps are absorbed as no-ops.
+#define R_START     0x0
+#define R_CW_FINAL  0x1
+#define R_CW_BEGIN  0x2
+#define R_CW_NEXT   0x3
+#define R_CCW_BEGIN 0x4
+#define R_CCW_FINAL 0x5
+#define R_CCW_NEXT  0x6
+#define DIR_CW      0x10
+#define DIR_CCW     0x20
+
+static const uint8_t ENC_TABLE[7][4] = {
+    {R_START,    R_CW_BEGIN,  R_CCW_BEGIN, R_START},
+    {R_CW_NEXT,  R_START,     R_CW_FINAL,  R_START | DIR_CW},
+    {R_CW_NEXT,  R_CW_BEGIN,  R_START,     R_START},
+    {R_CW_NEXT,  R_CW_BEGIN,  R_CW_FINAL,  R_START},
+    {R_CCW_NEXT, R_START,     R_CCW_BEGIN, R_START},
+    {R_CCW_NEXT, R_CCW_FINAL, R_START,     R_START | DIR_CCW},
+    {R_CCW_NEXT, R_CCW_FINAL, R_CCW_BEGIN, R_START},
+};
+
+static volatile uint8_t  encState    = R_START;
+static volatile int8_t   encoderDelta = 0;   // detent steps, consumed in loop()
+static volatile uint32_t encIsrCount = 0;    // A/B edges seen (diagnostic)
+
+static void IRAM_ATTR encoderISR() {
+    encIsrCount++;
+    uint8_t pins = (digitalRead(PIN_ENC_A) << 1) | digitalRead(PIN_ENC_B);
+    encState = ENC_TABLE[encState & 0x0f][pins];
+    uint8_t dir = encState & 0x30;
+    if (dir == DIR_CW)       encoderDelta++;
+    else if (dir == DIR_CCW) encoderDelta--;
+}
+
+// Report raw encoder state — helps localize a fault: rotate slowly and watch
+// whether the edge count climbs and A/B toggle, and whether SW drops to 0 when
+// the knob is pressed.
+static void cmdEncDebug() {
+    Serial.printf("ENC A=%d B=%d SW=%d edges=%lu delta=%d\n",
+                  digitalRead(PIN_ENC_A), digitalRead(PIN_ENC_B),
+                  digitalRead(PIN_ENC_SW), (unsigned long)encIsrCount,
+                  encoderDelta);
+}
+
+// Menu actions. Taps reuse the servo helpers; a tap keeps serial responsive so
+// RELEASE_ALL still interrupts it.
+static void actPowerTap()  { pressPower();  holdWithInterrupt(POWER_TAP_MS); releasePower();  }
+#ifdef PIN_SERVO_VOLUP
+static void actVolUp()     { pressVolUp();  holdWithInterrupt(300);          releaseVolUp();  }
+#endif
+static void actVolDn()     { pressVolDn();  holdWithInterrupt(300);          releaseVolDn();  }
+static void actFastboot()  { cmdFastboot(DEFAULT_SHUTDOWN_HOLD_MS, DEFAULT_FASTBOOT_COMBO_MS); }
+
+struct MenuItem { const char *name; void (*run)(); };
+static const MenuItem MENU[] = {
+    {"Power tap", actPowerTap},
+#ifdef PIN_SERVO_VOLUP
+    {"Vol Up",    actVolUp},
+#endif
+    {"Vol Down",  actVolDn},
+    {"Fastboot",  actFastboot},
+};
+static const int MENU_COUNT = sizeof(MENU) / sizeof(MENU[0]);
+static int menuIndex = 0;
+
+// Draw the menu with a ">" cursor on the current selection.
+static void oledMenu() {
+    oled.clearDisplay();
+    oled.setTextSize(1);
+    oled.setTextColor(SSD1306_WHITE);
+    oled.setCursor(0, 0);
+    oled.println("MobileMash");
+    oled.drawFastHLine(0, 10, OLED_WIDTH, SSD1306_WHITE);
+    for (int i = 0; i < MENU_COUNT; i++) {
+        oled.setCursor(0, 14 + i * 10);
+        oled.printf("%c %s", (i == menuIndex) ? '>' : ' ', MENU[i].name);
+    }
+    oled.display();
+}
+
+// Run the selected item, showing a "Running" screen while it blocks, then
+// return to the menu.
+static void runMenuItem(int idx) {
+    oled.clearDisplay();
+    oled.setTextSize(1);
+    oled.setTextColor(SSD1306_WHITE);
+    oled.setCursor(0, 0);
+    oled.println("Running:");
+    oled.setCursor(0, 20);
+    oled.setTextSize(2);
+    oled.println(MENU[idx].name);
+    oled.display();
+    Serial.printf("OK encoder run: %s\n", MENU[idx].name);
+    MENU[idx].run();
+    oledMenu();
+}
+
+// Poll consumed encoder rotation and the debounced button; refresh the display
+// on either event. Called every loop() iteration.
+static void handleEncoder() {
+    noInterrupts();
+    int8_t delta = encoderDelta;
+    encoderDelta = 0;
+    interrupts();
+    if (delta != 0) {
+        menuIndex = (menuIndex + delta) % MENU_COUNT;
+        if (menuIndex < 0) menuIndex += MENU_COUNT;
+        oledMenu();
+    }
+
+    // Button: active-low, INPUT_PULLUP. Fire on the HIGH→LOW edge, debounced.
+    static bool lastLevel = true;
+    static unsigned long lastChange = 0;
+    bool level = digitalRead(PIN_ENC_SW);
+    if (level != lastLevel && millis() - lastChange > 30) {
+        lastChange = millis();
+        lastLevel  = level;
+        if (level == LOW) runMenuItem(menuIndex);
+    }
+}
+#endif  // HAS_ENCODER
+
 // ── Parse & dispatch ────────────────────────────────────────────────────
 
 static unsigned long parseULong(const String &s, unsigned long defaultVal) {
@@ -221,6 +347,12 @@ static void processLine(String &line) {
         cmdStatus();
         return;
     }
+#ifdef HAS_ENCODER
+    if (line == "ENC") {
+        cmdEncDebug();
+        return;
+    }
+#endif
     if (line == "RELEASE_ALL") {
         releaseAll();
         Serial.println("OK RELEASE_ALL");
@@ -323,6 +455,17 @@ void setup() {
 
     releaseAll();
 
+#ifdef HAS_ENCODER
+    pinMode(PIN_ENC_A, INPUT_PULLUP);
+    pinMode(PIN_ENC_B, INPUT_PULLUP);
+    pinMode(PIN_ENC_SW, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(PIN_ENC_A), encoderISR, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(PIN_ENC_B), encoderISR, CHANGE);
+  #ifdef HAS_OLED
+    oledMenu();   // replace the boot splash with the resting menu
+  #endif
+#endif
+
     Serial.println("OK MobileMash ready");
 }
 
@@ -331,4 +474,7 @@ void loop() {
         String line = Serial.readStringUntil('\n');
         processLine(line);
     }
+#ifdef HAS_ENCODER
+    handleEncoder();
+#endif
 }
