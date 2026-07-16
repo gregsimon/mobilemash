@@ -35,20 +35,38 @@ An ESP32 dev board drives the servos and accepts commands over USB serial.
 
 ## Wiring
 
+Servo signal pins depend on the board (see `firmware/include/config.h`):
+
+| Signal              | ESP32 DevKit | XIAO ESP32-C6 |
+|---------------------|--------------|---------------|
+| Power servo (orange)     | GPIO 13 | GPIO 22 (D4) |
+| Volume-down servo (orange) | GPIO 14 | GPIO 23 (D5) |
+
 ```
-ESP32 GPIO 13 --> Power servo signal (orange)
-ESP32 GPIO 14 --> Volume-down servo signal (orange)
-ESP32 5V      --> Both servo VCC (red)
-ESP32 GND     --> Both servo GND (brown)
+<board> 5V/5V-out --> Both servo VCC (red)
+<board> GND       --> Both servo GND (brown)
 ```
 
 ## Firmware
 
-Built with PlatformIO (Arduino framework).
+Built with PlatformIO (Arduino framework). Two build environments are
+defined in `firmware/platformio.ini`:
+
+- `esp32` — ESP32 DevKit (default)
+- `seeed` — Seeed XIAO ESP32-C6
 
 ```bash
 cd firmware
-pio run -t upload
+
+# ESP32 DevKit (default env)
+pio run -e esp32 -t upload
+
+# Seeed XIAO ESP32-C6
+pio run -e seeed -t upload
+
+# Or via the helper script:
+./flash.sh                     # DevKit
+./flash.sh seeed  # XIAO ESP32-C6
 ```
 
 ### Serial Protocol (115200 baud)

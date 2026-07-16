@@ -1,8 +1,19 @@
 #pragma once
 
 // ---------- Servo GPIO pins ----------
-#define PIN_SERVO_POWER   13
-#define PIN_SERVO_VOLDN   14
+// Pins differ per board; the active board is selected by a -D flag in
+// platformio.ini (BOARD_ESP32_DEVKIT or BOARD_XIAO_ESP32C6).
+#if defined(BOARD_XIAO_ESP32C6)
+  // Seeed XIAO ESP32-C6: D4 = GPIO22, D5 = GPIO23
+  #define PIN_SERVO_POWER   22
+  #define PIN_SERVO_VOLDN   23
+#elif defined(BOARD_ESP32_DEVKIT)
+  // ESP32 DevKit
+  #define PIN_SERVO_POWER   13
+  #define PIN_SERVO_VOLDN   14
+#else
+  #error "No board selected — define BOARD_ESP32_DEVKIT or BOARD_XIAO_ESP32C6 (see platformio.ini)"
+#endif
 
 // ---------- Servo angles (degrees) ----------
 // "Released" = arm is away from the button.
