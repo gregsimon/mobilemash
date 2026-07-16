@@ -204,27 +204,27 @@ static void cmdStatus() {
 
 // ── Rotary encoder + on-device menu ─────────────────────────────────────
 #ifdef HAS_ENCODER
-// Full-step quadrature decoder (Ben Buxton state table). Each ISR reads both
-// channels and advances a state machine; a valid detent emits DIR_CW/DIR_CCW
-// while contact bounce and partial steps are absorbed as no-ops.
-#define R_START     0x0
-#define R_CW_FINAL  0x1
-#define R_CW_BEGIN  0x2
-#define R_CW_NEXT   0x3
-#define R_CCW_BEGIN 0x4
-#define R_CCW_FINAL 0x5
-#define R_CCW_NEXT  0x6
-#define DIR_CW      0x10
-#define DIR_CCW     0x20
+// Half-step quadrature decoder (Ben Buxton state table). Each ISR reads both
+// channels and advances a state machine; contact bounce is absorbed as no-ops.
+// This EC11 rests a detent at every HALF electrical cycle, so the half-step
+// table (which emits at both the 00 and 11 rest points) yields one step per
+// detent — 1:1 with the menu. A full-step table would need two detents per step.
+#define R_START       0x0
+#define R_CCW_BEGIN   0x1
+#define R_CW_BEGIN    0x2
+#define R_START_M     0x3
+#define R_CW_BEGIN_M  0x4
+#define R_CCW_BEGIN_M 0x5
+#define DIR_CW        0x10
+#define DIR_CCW       0x20
 
-static const uint8_t ENC_TABLE[7][4] = {
-    {R_START,    R_CW_BEGIN,  R_CCW_BEGIN, R_START},
-    {R_CW_NEXT,  R_START,     R_CW_FINAL,  R_START | DIR_CW},
-    {R_CW_NEXT,  R_CW_BEGIN,  R_START,     R_START},
-    {R_CW_NEXT,  R_CW_BEGIN,  R_CW_FINAL,  R_START},
-    {R_CCW_NEXT, R_START,     R_CCW_BEGIN, R_START},
-    {R_CCW_NEXT, R_CCW_FINAL, R_START,     R_START | DIR_CCW},
-    {R_CCW_NEXT, R_CCW_FINAL, R_CCW_BEGIN, R_START},
+static const uint8_t ENC_TABLE[6][4] = {
+    {R_START_M,           R_CW_BEGIN,    R_CCW_BEGIN,   R_START},
+    {R_START_M | DIR_CCW, R_START,       R_CCW_BEGIN,   R_START},
+    {R_START_M | DIR_CW,  R_CW_BEGIN,    R_START,       R_START},
+    {R_START_M,           R_CCW_BEGIN_M, R_CW_BEGIN_M,  R_START},
+    {R_START_M,           R_START_M,     R_CW_BEGIN_M,  R_START | DIR_CW},
+    {R_START_M,           R_CCW_BEGIN_M, R_START_M,     R_START | DIR_CCW},
 };
 
 static volatile uint8_t  encState    = R_START;
@@ -248,6 +248,25 @@ static void cmdEncDebug() {
                   digitalRead(PIN_ENC_A), digitalRead(PIN_ENC_B),
                   digitalRead(PIN_ENC_SW), (unsigned long)encIsrCount,
                   encoderDelta);
+}
+
+// Read every free XIAO header pin (servos use D8/D9/D10, I2C uses D2/D3) with
+// internal pull-ups engaged. Turn the knob and watch which two toggle — those
+// are the true A/B GPIOs; press it and watch which drops — that is SW.
+struct ScanPin { const char *label; uint8_t gpio; };
+static const ScanPin SCAN_PINS[] = {
+    {"D0",  0}, {"D1", 1}, {"D6", 16}, {"D7", 17}, {"D4", 22}, {"D5", 23},
+};
+static const int SCAN_COUNT = sizeof(SCAN_PINS) / sizeof(SCAN_PINS[0]);
+
+static void cmdScan() {
+    Serial.print("SCAN");
+    for (int i = 0; i < SCAN_COUNT; i++) {
+        pinMode(SCAN_PINS[i].gpio, INPUT_PULLUP);
+        Serial.printf(" %s(g%u)=%d", SCAN_PINS[i].label, SCAN_PINS[i].gpio,
+                      digitalRead(SCAN_PINS[i].gpio));
+    }
+    Serial.println();
 }
 
 // Menu actions. Taps reuse the servo helpers; a tap keeps serial responsive so
@@ -311,8 +330,9 @@ static void handleEncoder() {
     encoderDelta = 0;
     interrupts();
     if (delta != 0) {
-        menuIndex = (menuIndex + delta) % MENU_COUNT;
-        if (menuIndex < 0) menuIndex += MENU_COUNT;
+        menuIndex += delta;
+        if (menuIndex < 0)              menuIndex = 0;
+        if (menuIndex >= MENU_COUNT)    menuIndex = MENU_COUNT - 1;
         oledMenu();
     }
 
@@ -350,6 +370,10 @@ static void processLine(String &line) {
 #ifdef HAS_ENCODER
     if (line == "ENC") {
         cmdEncDebug();
+        return;
+    }
+    if (line == "SCAN") {
+        cmdScan();
         return;
     }
 #endif
