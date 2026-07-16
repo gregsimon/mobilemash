@@ -507,6 +507,21 @@ static void handlePanicButton() {
         if (level == LOW) {
             releaseAll();
             Serial.println("OK PANIC (all servos home)");
+#ifdef HAS_OLED
+            // Flash "PANIC" large, then drop back to the home screen.
+            oled.clearDisplay();
+            oled.setTextSize(3);
+            oled.setTextColor(SSD1306_WHITE);
+            oled.setCursor(19, 20);   // roughly centered for 5 chars @ size 3
+            oled.println("PANIC");
+            oled.display();
+            delay(1000);
+  #ifdef HAS_ENCODER
+            menuMode  = MODE_MAIN;
+            menuIndex = 0;
+            drawMenu();
+  #endif
+#endif
         }
     }
 }
