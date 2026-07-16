@@ -58,31 +58,44 @@ static bool volDnPressed = false;
 static bool volUpPressed = false;
 #endif
 
+// ── Tunable servo angles ────────────────────────────────────────────────
+// Seeded from the config.h defaults but adjustable at runtime via the
+// on-device "Tuning" menu (see below). "Released"/start = arm away from the
+// button, "Pressed"/stop = arm pushing it.
+static int anglePowerReleased = ANGLE_POWER_RELEASED;
+static int anglePowerPressed  = ANGLE_POWER_PRESSED;
+static int angleVoldnReleased = ANGLE_VOLDN_RELEASED;
+static int angleVoldnPressed  = ANGLE_VOLDN_PRESSED;
+#ifdef PIN_SERVO_VOLUP
+static int angleVolupReleased = ANGLE_VOLUP_RELEASED;
+static int angleVolupPressed  = ANGLE_VOLUP_PRESSED;
+#endif
+
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 static void pressPower() {
-    servoPower.write(ANGLE_POWER_PRESSED);
+    servoPower.write(anglePowerPressed);
     powerPressed = true;
 }
 static void releasePower() {
-    servoPower.write(ANGLE_POWER_RELEASED);
+    servoPower.write(anglePowerReleased);
     powerPressed = false;
 }
 static void pressVolDn() {
-    servoVolDn.write(ANGLE_VOLDN_PRESSED);
+    servoVolDn.write(angleVoldnPressed);
     volDnPressed = true;
 }
 static void releaseVolDn() {
-    servoVolDn.write(ANGLE_VOLDN_RELEASED);
+    servoVolDn.write(angleVoldnReleased);
     volDnPressed = false;
 }
 #ifdef PIN_SERVO_VOLUP
 static void pressVolUp() {
-    servoVolUp.write(ANGLE_VOLUP_PRESSED);
+    servoVolUp.write(angleVolupPressed);
     volUpPressed = true;
 }
 static void releaseVolUp() {
-    servoVolUp.write(ANGLE_VOLUP_RELEASED);
+    servoVolUp.write(angleVolupReleased);
     volUpPressed = false;
 }
 #endif
@@ -278,6 +291,8 @@ static void actVolUp()     { pressVolUp();  holdWithInterrupt(300);          rel
 static void actVolDn()     { pressVolDn();  holdWithInterrupt(300);          releaseVolDn();  }
 static void actFastboot()  { cmdFastboot(DEFAULT_SHUTDOWN_HOLD_MS, DEFAULT_FASTBOOT_COMBO_MS); }
 
+// A main-menu entry runs an action; the special "Tuning" entry (run == nullptr)
+// opens the tuning submenu instead of running a blocking action.
 struct MenuItem { const char *name; void (*run)(); };
 static const MenuItem MENU[] = {
     {"Power tap", actPowerTap},
@@ -286,26 +301,94 @@ static const MenuItem MENU[] = {
 #endif
     {"Vol Down",  actVolDn},
     {"Fastboot",  actFastboot},
+    {"Tuning",    nullptr},
 };
 static const int MENU_COUNT = sizeof(MENU) / sizeof(MENU[0]);
-static int menuIndex = 0;
 
-// Draw the menu with a ">" cursor on the current selection.
-static void oledMenu() {
+// Each servo's tunable start/stop angles, indexed by the tuning submenu.
+struct ServoTune {
+    const char *name;
+    Servo      *servo;
+    int        *start;   // released angle (arm away)
+    int        *stop;    // pressed angle  (arm on the button)
+};
+static ServoTune SERVOS[] = {
+    {"Power",    &servoPower, &anglePowerReleased, &anglePowerPressed},
+#ifdef PIN_SERVO_VOLUP
+    {"Vol Up",   &servoVolUp, &angleVolupReleased, &angleVolupPressed},
+#endif
+    {"Vol Down", &servoVolDn, &angleVoldnReleased, &angleVoldnPressed},
+};
+static const int SERVO_COUNT = sizeof(SERVOS) / sizeof(SERVOS[0]);
+
+// Menu navigation state. The encoder drives a small stack of screens:
+//   MAIN → SERVOS (pick a servo) → PARAMS (Start/Stop/Back) → EDIT (live angle)
+enum MenuMode { MODE_MAIN, MODE_SERVOS, MODE_PARAMS, MODE_EDIT };
+static MenuMode menuMode  = MODE_MAIN;
+static int      menuIndex = 0;   // selection within the current screen
+static int      tuneServo = 0;   // servo chosen in MODE_SERVOS
+static int      tuneParam = 0;   // 0 = start, 1 = stop (chosen in MODE_PARAMS)
+static int      editAngle = 0;   // working angle while in MODE_EDIT
+
+// Number of selectable rows on the current screen (SERVOS/PARAMS include Back).
+static int currentCount() {
+    switch (menuMode) {
+        case MODE_MAIN:   return MENU_COUNT;
+        case MODE_SERVOS: return SERVO_COUNT + 1;   // servos + Back
+        case MODE_PARAMS: return 3;                 // Start, Stop, Back
+        default:          return 1;
+    }
+}
+
+// Draw whichever screen is active, with a ">" cursor on the current selection.
+static void drawMenu() {
     oled.clearDisplay();
     oled.setTextSize(1);
     oled.setTextColor(SSD1306_WHITE);
     oled.setCursor(0, 0);
-    oled.println("MobileMash");
-    oled.drawFastHLine(0, 10, OLED_WIDTH, SSD1306_WHITE);
-    for (int i = 0; i < MENU_COUNT; i++) {
-        oled.setCursor(0, 14 + i * 10);
-        oled.printf("%c %s", (i == menuIndex) ? '>' : ' ', MENU[i].name);
+
+    if (menuMode == MODE_MAIN) {
+        oled.println("MobileMash");
+        oled.drawFastHLine(0, 10, OLED_WIDTH, SSD1306_WHITE);
+        for (int i = 0; i < MENU_COUNT; i++) {
+            oled.setCursor(0, 14 + i * 10);
+            oled.printf("%c %s", (i == menuIndex) ? '>' : ' ', MENU[i].name);
+        }
+    } else if (menuMode == MODE_SERVOS) {
+        oled.println("Tuning");
+        oled.drawFastHLine(0, 10, OLED_WIDTH, SSD1306_WHITE);
+        for (int i = 0; i < SERVO_COUNT; i++) {
+            oled.setCursor(0, 14 + i * 10);
+            oled.printf("%c %s", (i == menuIndex) ? '>' : ' ', SERVOS[i].name);
+        }
+        oled.setCursor(0, 14 + SERVO_COUNT * 10);
+        oled.printf("%c Back", (menuIndex == SERVO_COUNT) ? '>' : ' ');
+    } else if (menuMode == MODE_PARAMS) {
+        oled.println(SERVOS[tuneServo].name);
+        oled.drawFastHLine(0, 10, OLED_WIDTH, SSD1306_WHITE);
+        oled.setCursor(0, 14);
+        oled.printf("%c Start  %3d", (menuIndex == 0) ? '>' : ' ',
+                    *SERVOS[tuneServo].start);
+        oled.setCursor(0, 24);
+        oled.printf("%c Stop   %3d", (menuIndex == 1) ? '>' : ' ',
+                    *SERVOS[tuneServo].stop);
+        oled.setCursor(0, 34);
+        oled.printf("%c Back", (menuIndex == 2) ? '>' : ' ');
+    } else {  // MODE_EDIT
+        oled.printf("%s %s\n", SERVOS[tuneServo].name,
+                    (tuneParam == 0) ? "Start" : "Stop");
+        oled.drawFastHLine(0, 10, OLED_WIDTH, SSD1306_WHITE);
+        oled.setTextSize(3);
+        oled.setCursor(24, 22);
+        oled.printf("%d", editAngle);
+        oled.setTextSize(1);
+        oled.setCursor(0, 54);
+        oled.println("turn:set  press:save");
     }
     oled.display();
 }
 
-// Run the selected item, showing a "Running" screen while it blocks, then
+// Run a main-menu action, showing a "Running" screen while it blocks, then
 // return to the menu.
 static void runMenuItem(int idx) {
     oled.clearDisplay();
@@ -319,7 +402,61 @@ static void runMenuItem(int idx) {
     oled.display();
     Serial.printf("OK encoder run: %s\n", MENU[idx].name);
     MENU[idx].run();
-    oledMenu();
+    drawMenu();
+}
+
+// Handle a button press: activate the current selection for whichever screen
+// is active, transitioning between screens as needed.
+static void menuSelect() {
+    switch (menuMode) {
+    case MODE_MAIN:
+        if (MENU[menuIndex].run == nullptr) {   // "Tuning" → open submenu
+            menuMode  = MODE_SERVOS;
+            menuIndex = 0;
+            drawMenu();
+        } else {
+            runMenuItem(menuIndex);
+        }
+        break;
+
+    case MODE_SERVOS:
+        if (menuIndex == SERVO_COUNT) {         // Back → main menu
+            menuMode  = MODE_MAIN;
+            menuIndex = MENU_COUNT - 1;          // land back on "Tuning"
+        } else {
+            tuneServo = menuIndex;
+            menuMode  = MODE_PARAMS;
+            menuIndex = 0;
+        }
+        drawMenu();
+        break;
+
+    case MODE_PARAMS:
+        if (menuIndex == 2) {                    // Back → servo list
+            menuMode  = MODE_SERVOS;
+            menuIndex = tuneServo;
+        } else {                                 // edit Start or Stop live
+            tuneParam = menuIndex;
+            editAngle = (tuneParam == 0) ? *SERVOS[tuneServo].start
+                                         : *SERVOS[tuneServo].stop;
+            SERVOS[tuneServo].servo->write(editAngle);   // preview current
+            menuMode  = MODE_EDIT;
+        }
+        drawMenu();
+        break;
+
+    case MODE_EDIT:                              // save and step back out
+        if (tuneParam == 0) *SERVOS[tuneServo].start = editAngle;
+        else                *SERVOS[tuneServo].stop  = editAngle;
+        Serial.printf("OK tune %s %s=%d\n", SERVOS[tuneServo].name,
+                      (tuneParam == 0) ? "start" : "stop", editAngle);
+        // Park the arm back at its start angle so it isn't left pressing.
+        SERVOS[tuneServo].servo->write(*SERVOS[tuneServo].start);
+        menuMode  = MODE_PARAMS;
+        menuIndex = tuneParam;
+        drawMenu();
+        break;
+    }
 }
 
 // Poll consumed encoder rotation and the debounced button; refresh the display
@@ -330,10 +467,18 @@ static void handleEncoder() {
     encoderDelta = 0;
     interrupts();
     if (delta != 0) {
-        menuIndex += delta;
-        if (menuIndex < 0)              menuIndex = 0;
-        if (menuIndex >= MENU_COUNT)    menuIndex = MENU_COUNT - 1;
-        oledMenu();
+        if (menuMode == MODE_EDIT) {
+            editAngle += delta;
+            if (editAngle < 0)   editAngle = 0;
+            if (editAngle > 180) editAngle = 180;
+            SERVOS[tuneServo].servo->write(editAngle);   // live preview
+        } else {
+            int count = currentCount();
+            menuIndex += delta;
+            if (menuIndex < 0)       menuIndex = 0;
+            if (menuIndex >= count)  menuIndex = count - 1;
+        }
+        drawMenu();
     }
 
     // Button: active-low, INPUT_PULLUP. Fire on the HIGH→LOW edge, debounced.
@@ -343,7 +488,7 @@ static void handleEncoder() {
     if (level != lastLevel && millis() - lastChange > 30) {
         lastChange = millis();
         lastLevel  = level;
-        if (level == LOW) runMenuItem(menuIndex);
+        if (level == LOW) menuSelect();
     }
 }
 #endif  // HAS_ENCODER
@@ -486,7 +631,7 @@ void setup() {
     attachInterrupt(digitalPinToInterrupt(PIN_ENC_A), encoderISR, CHANGE);
     attachInterrupt(digitalPinToInterrupt(PIN_ENC_B), encoderISR, CHANGE);
   #ifdef HAS_OLED
-    oledMenu();   // replace the boot splash with the resting menu
+    drawMenu();   // replace the boot splash with the resting menu
   #endif
 #endif
 
