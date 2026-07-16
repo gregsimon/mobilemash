@@ -491,7 +491,26 @@ static void handleEncoder() {
         if (level == LOW) menuSelect();
     }
 }
+
 #endif  // HAS_ENCODER
+
+#ifdef PIN_PANIC
+// Momentary panic button: release every servo to its home position from any
+// state. Active-low with an internal pull-up, debounced on the HIGH→LOW edge.
+static void handlePanicButton() {
+    static bool lastLevel = true;
+    static unsigned long lastChange = 0;
+    bool level = digitalRead(PIN_PANIC);
+    if (level != lastLevel && millis() - lastChange > 30) {
+        lastChange = millis();
+        lastLevel  = level;
+        if (level == LOW) {
+            releaseAll();
+            Serial.println("OK PANIC (all servos home)");
+        }
+    }
+}
+#endif  // PIN_PANIC
 
 // ── Parse & dispatch ────────────────────────────────────────────────────
 
@@ -624,6 +643,10 @@ void setup() {
 
     releaseAll();
 
+#ifdef PIN_PANIC
+    pinMode(PIN_PANIC, INPUT_PULLUP);
+#endif
+
 #ifdef HAS_ENCODER
     pinMode(PIN_ENC_A, INPUT_PULLUP);
     pinMode(PIN_ENC_B, INPUT_PULLUP);
@@ -645,5 +668,8 @@ void loop() {
     }
 #ifdef HAS_ENCODER
     handleEncoder();
+#endif
+#ifdef PIN_PANIC
+    handlePanicButton();
 #endif
 }

@@ -24,6 +24,9 @@
   #define PIN_ENC_A         17   // D7  (header pin 14) quadrature channel A
   #define PIN_ENC_B         22   // D4  (header pin 5)  quadrature channel B
   #define PIN_ENC_SW        23   // D5  (header pin 6)  push-button (active low)
+  // Momentary panic button — releases every servo back to its home position
+  // from anywhere (active low, internal pull-up).
+  #define PIN_PANIC         16   // D6  (header pin 7)
 #elif defined(BOARD_ESP32_DEVKIT)
   // ESP32 DevKit (power + volume-down only)
   #define PIN_SERVO_POWER   13
