@@ -3,12 +3,23 @@
 // ---------- Servo GPIO pins ----------
 // Pins differ per board; the active board is selected by a -D flag in
 // platformio.ini (BOARD_ESP32_DEVKIT or BOARD_XIAO_ESP32C6).
+// A board that defines PIN_SERVO_VOLUP gets a third (volume-up) servo;
+// boards that leave it undefined build without one.
 #if defined(BOARD_XIAO_ESP32C6)
-  // Seeed XIAO ESP32-C6: D4 = GPIO22, D5 = GPIO23
-  #define PIN_SERVO_POWER   22
-  #define PIN_SERVO_VOLDN   23
+  // Seeed XIAO ESP32-C6
+  #define PIN_SERVO_POWER   18   // D10
+  #define PIN_SERVO_VOLUP   20   // D9
+  #define PIN_SERVO_VOLDN   19   // D8
+  // SSD1306 128x64 OLED on I2C
+  #define HAS_OLED
+  #define PIN_I2C_SDA       2    // D2
+  #define PIN_I2C_SCL       21   // D3
+  #define OLED_WIDTH        128
+  #define OLED_HEIGHT       64
+  #define OLED_I2C_ADDR     0x3C
+  #define OLED_ROTATION     2    // 0=none, 1=90°, 2=180°, 3=270°
 #elif defined(BOARD_ESP32_DEVKIT)
-  // ESP32 DevKit
+  // ESP32 DevKit (power + volume-down only)
   #define PIN_SERVO_POWER   13
   #define PIN_SERVO_VOLDN   14
 #else
@@ -24,6 +35,11 @@
 
 #define ANGLE_VOLDN_RELEASED  0
 #define ANGLE_VOLDN_PRESSED   55
+
+#ifdef PIN_SERVO_VOLUP
+#define ANGLE_VOLUP_RELEASED  0
+#define ANGLE_VOLUP_PRESSED   55
+#endif
 
 // ---------- Timing defaults (ms) ----------
 #define DEFAULT_SHUTDOWN_HOLD_MS   45000   // 45 s power hold for force-off

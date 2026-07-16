@@ -39,8 +39,18 @@ Servo signal pins depend on the board (see `firmware/include/config.h`):
 
 | Signal              | ESP32 DevKit | XIAO ESP32-C6 |
 |---------------------|--------------|---------------|
-| Power servo (orange)     | GPIO 13 | GPIO 22 (D4) |
-| Volume-down servo (orange) | GPIO 14 | GPIO 23 (D5) |
+| Power servo (orange)       | GPIO 13 | GPIO 18 (D10) |
+| Volume-up servo (orange)   | —       | GPIO 20 (D9)  |
+| Volume-down servo (orange) | GPIO 14 | GPIO 19 (D8)  |
+| OLED SDA                   | —       | GPIO 2 (D2)   |
+| OLED SCL                   | —       | GPIO 21 (D3)  |
+
+The volume-up servo exists only on the XIAO ESP32-C6 build (commands
+`PRESS_VOLUP` / `ANGLE_VOLUP`); the DevKit build has power + volume-down only.
+
+The XIAO ESP32-C6 build also drives a 128x64 SSD1306 OLED over I2C
+(address `0x3C`), which shows `Fuchsia` on boot. The DevKit build has no
+display.
 
 ```
 <board> 5V/5V-out --> Both servo VCC (red)
