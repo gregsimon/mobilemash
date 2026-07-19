@@ -17,6 +17,8 @@
 #include <Adafruit_SSD1306.h>
 #endif
 
+static volatile uint32_t lastSerialTrafficMs = 0;
+
 // ── Servos ──────────────────────────────────────────────────────────────
 Servo servoPower;
 Servo servoVolDn;
@@ -48,9 +50,33 @@ static void oledShow(const char *msg) {
     oled.clearDisplay();
     oled.setTextSize(2);
     oled.setTextColor(SSD1306_WHITE);
-    oled.setCursor(0, 0);
+    int len = strlen(msg);
+    int x = (OLED_WIDTH - len * 12) / 2;
+    if (x < 0) x = 0;
+    oled.setCursor(x, 24);
     oled.println(msg);
     oled.display();
+}
+
+static void drawFooter(const char *text) {
+    oled.drawFastHLine(0, 47, OLED_WIDTH, SSD1306_WHITE);
+    int len = strlen(text);
+    int x = (OLED_WIDTH - (len * 6)) / 2;
+    if (x < 0) x = 0;
+    oled.setCursor(x, 52);
+    oled.print(text);
+
+    // Draw Serial port connection & traffic indicator on the far right
+    bool isConnected = (bool)Serial;
+    bool hasTraffic = (millis() - lastSerialTrafficMs < 150);
+    oled.setCursor(98, 52);
+    if (hasTraffic) {
+        oled.print("<-*->");
+    } else if (isConnected) {
+        oled.print(" <-->");
+    } else {
+        oled.print("     ");
+    }
 }
 #endif
 
@@ -116,6 +142,7 @@ static bool holdWithInterrupt(unsigned long durationMs) {
     unsigned long start = millis();
     while (millis() - start < durationMs) {
         if (Serial.available()) {
+            lastSerialTrafficMs = millis();
             String line = Serial.readStringUntil('\n');
             line.trim();
             if (line == "RELEASE_ALL") {
@@ -178,6 +205,7 @@ static void cmdFastboot(unsigned long shutdownMs, unsigned long comboMs) {
     // Keep power pressed for POWER_TAP_MS or until interrupted
     while (millis() - tapStart < POWER_TAP_MS) {
         if (Serial.available()) {
+            lastSerialTrafficMs = millis();
             String line = Serial.readStringUntil('\n');
             line.trim();
             if (line == "RELEASE_ALL") {
@@ -343,49 +371,97 @@ static int currentCount() {
 }
 
 // Draw whichever screen is active, with a ">" cursor on the current selection.
+#define MAX_VISIBLE_ITEMS 3
+#define ITEM_SPACING 11
+#define MENU_START_Y 13
+
 static void drawMenu() {
     oled.clearDisplay();
     oled.setTextSize(1);
     oled.setTextColor(SSD1306_WHITE);
     oled.setCursor(0, 0);
 
+    // Calculate scroll offset for scrollable menus (MODE_MAIN, MODE_SERVOS, MODE_PARAMS)
+    int scrollOffset = 0;
+    int totalItems = currentCount();
+    if (menuMode == MODE_MAIN || menuMode == MODE_SERVOS || menuMode == MODE_PARAMS) {
+        static int lastMenuMode = -1;
+        static int prevScrollOffset = 0;
+        if ((int)menuMode != lastMenuMode) {
+            prevScrollOffset = 0;
+            lastMenuMode = (int)menuMode;
+        }
+        
+        if (menuIndex < prevScrollOffset) {
+            prevScrollOffset = menuIndex;
+        } else if (menuIndex >= prevScrollOffset + MAX_VISIBLE_ITEMS) {
+            prevScrollOffset = menuIndex - MAX_VISIBLE_ITEMS + 1;
+        }
+        
+        int maxScroll = totalItems - MAX_VISIBLE_ITEMS;
+        if (maxScroll < 0) maxScroll = 0;
+        if (prevScrollOffset > maxScroll) {
+            prevScrollOffset = maxScroll;
+        }
+        if (prevScrollOffset < 0) {
+            prevScrollOffset = 0;
+        }
+        scrollOffset = prevScrollOffset;
+    }
+
     if (menuMode == MODE_MAIN) {
         oled.println("MobileMash");
         oled.drawFastHLine(0, 10, OLED_WIDTH, SSD1306_WHITE);
-        for (int i = 0; i < MENU_COUNT; i++) {
-            oled.setCursor(0, 14 + i * 10);
-            oled.printf("%c %s", (i == menuIndex) ? '>' : ' ', MENU[i].name);
+        for (int i = 0; i < MAX_VISIBLE_ITEMS; i++) {
+            int idx = scrollOffset + i;
+            if (idx >= MENU_COUNT) break;
+            oled.setCursor(0, MENU_START_Y + i * ITEM_SPACING);
+            oled.printf("%c %s", (idx == menuIndex) ? '>' : ' ', MENU[idx].name);
         }
+        drawFooter("");
     } else if (menuMode == MODE_SERVOS) {
         oled.println("Tuning");
         oled.drawFastHLine(0, 10, OLED_WIDTH, SSD1306_WHITE);
-        for (int i = 0; i < SERVO_COUNT; i++) {
-            oled.setCursor(0, 14 + i * 10);
-            oled.printf("%c %s", (i == menuIndex) ? '>' : ' ', SERVOS[i].name);
+        for (int i = 0; i < MAX_VISIBLE_ITEMS; i++) {
+            int idx = scrollOffset + i;
+            if (idx >= SERVO_COUNT + 1) break;
+            oled.setCursor(0, MENU_START_Y + i * ITEM_SPACING);
+            if (idx == SERVO_COUNT) {
+                oled.printf("%c Back", (idx == menuIndex) ? '>' : ' ');
+            } else {
+                oled.printf("%c %s", (idx == menuIndex) ? '>' : ' ', SERVOS[idx].name);
+            }
         }
-        oled.setCursor(0, 14 + SERVO_COUNT * 10);
-        oled.printf("%c Back", (menuIndex == SERVO_COUNT) ? '>' : ' ');
+        drawFooter("");
     } else if (menuMode == MODE_PARAMS) {
         oled.println(SERVOS[tuneServo].name);
         oled.drawFastHLine(0, 10, OLED_WIDTH, SSD1306_WHITE);
-        oled.setCursor(0, 14);
-        oled.printf("%c Start  %3d", (menuIndex == 0) ? '>' : ' ',
-                    *SERVOS[tuneServo].start);
-        oled.setCursor(0, 24);
-        oled.printf("%c Stop   %3d", (menuIndex == 1) ? '>' : ' ',
-                    *SERVOS[tuneServo].stop);
-        oled.setCursor(0, 34);
-        oled.printf("%c Back", (menuIndex == 2) ? '>' : ' ');
+        for (int i = 0; i < MAX_VISIBLE_ITEMS; i++) {
+            int idx = scrollOffset + i;
+            if (idx >= 3) break;
+            oled.setCursor(0, MENU_START_Y + i * ITEM_SPACING);
+            if (idx == 0) {
+                oled.printf("%c Start  %3d", (idx == menuIndex) ? '>' : ' ',
+                            *SERVOS[tuneServo].start);
+            } else if (idx == 1) {
+                oled.printf("%c Stop   %3d", (idx == menuIndex) ? '>' : ' ',
+                            *SERVOS[tuneServo].stop);
+            } else {
+                oled.printf("%c Back", (idx == menuIndex) ? '>' : ' ');
+            }
+        }
+        drawFooter("");
     } else {  // MODE_EDIT
         oled.printf("%s %s\n", SERVOS[tuneServo].name,
                     (tuneParam == 0) ? "Start" : "Stop");
         oled.drawFastHLine(0, 10, OLED_WIDTH, SSD1306_WHITE);
         oled.setTextSize(3);
-        oled.setCursor(24, 22);
+        int numDigits = (editAngle >= 100) ? 3 : ((editAngle >= 10) ? 2 : 1);
+        int xPos = (OLED_WIDTH - (numDigits * 18 - 3)) / 2;
+        oled.setCursor(xPos, 19);
         oled.printf("%d", editAngle);
         oled.setTextSize(1);
-        oled.setCursor(0, 54);
-        oled.println("turn:set  press:save");
+        drawFooter("adjust  save");
     }
     oled.display();
 }
@@ -398,9 +474,17 @@ static void runMenuItem(int idx) {
     oled.setTextColor(SSD1306_WHITE);
     oled.setCursor(0, 0);
     oled.println("Running:");
-    oled.setCursor(0, 20);
+    oled.drawFastHLine(0, 10, OLED_WIDTH, SSD1306_WHITE);
+    
+    int len = strlen(MENU[idx].name);
+    int x = (OLED_WIDTH - len * 12) / 2;
+    if (x < 0) x = 0;
+    oled.setCursor(x, 22);
     oled.setTextSize(2);
     oled.println(MENU[idx].name);
+    
+    oled.setTextSize(1);
+    drawFooter("running...");
     oled.display();
     Serial.printf("OK encoder run: %s\n", MENU[idx].name);
     MENU[idx].run();
@@ -534,8 +618,10 @@ static void handlePanicButton() {
             oled.clearDisplay();
             oled.setTextSize(3);
             oled.setTextColor(SSD1306_WHITE);
-            oled.setCursor(19, 20);   // roughly centered for 5 chars @ size 3
+            int x = (OLED_WIDTH - (5 * 18 - 3)) / 2;
+            oled.setCursor(x, 19);
             oled.println("PANIC");
+            drawFooter("servos home");
             oled.display();
             delay(1000);
   #ifdef HAS_ENCODER
@@ -717,6 +803,7 @@ void setup() {
 
 void loop() {
     if (Serial.available()) {
+        lastSerialTrafficMs = millis();
         String line = Serial.readStringUntil('\n');
         processLine(line);
     }
@@ -726,4 +813,21 @@ void loop() {
 #ifdef PIN_PANIC
     handlePanicButton();
 #endif
+
+    // Redraw screen if serial connection status or traffic status changes
+    #ifdef HAS_OLED
+      #ifdef HAS_ENCODER
+        static bool wasSerialConnected = false;
+        static bool wasTraffic = false;
+        
+        bool isSerialConnected = (bool)Serial;
+        bool isTraffic = (millis() - lastSerialTrafficMs < 150);
+        
+        if (isSerialConnected != wasSerialConnected || isTraffic != wasTraffic) {
+            wasSerialConnected = isSerialConnected;
+            wasTraffic = isTraffic;
+            drawMenu();
+        }
+      #endif
+    #endif
 }
