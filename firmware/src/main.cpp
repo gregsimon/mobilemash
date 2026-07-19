@@ -10,6 +10,7 @@
 
 #include <Arduino.h>
 #include <ESP32Servo.h>
+#include <Preferences.h>
 #include "config.h"
 #ifdef HAS_OLED
 #include <Wire.h>
@@ -22,6 +23,7 @@ Servo servoVolDn;
 #ifdef PIN_SERVO_VOLUP
 Servo servoVolUp;
 #endif
+static Preferences preferences;
 #ifdef HAS_OLED
 static Adafruit_SSD1306 oled(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);
 
@@ -450,6 +452,26 @@ static void menuSelect() {
         else                *SERVOS[tuneServo].stop  = editAngle;
         Serial.printf("OK tune %s %s=%d\n", SERVOS[tuneServo].name,
                       (tuneParam == 0) ? "start" : "stop", editAngle);
+
+        // Save updated angle to non-volatile storage
+        preferences.begin("servo_angles", false);
+        if (tuneServo == 0) { // Power
+            preferences.putInt(tuneParam == 0 ? "p_rel" : "p_prs", editAngle);
+        }
+#ifdef PIN_SERVO_VOLUP
+        else if (tuneServo == 1) { // Vol Up
+            preferences.putInt(tuneParam == 0 ? "vu_rel" : "vu_prs", editAngle);
+        }
+        else if (tuneServo == 2) { // Vol Down
+            preferences.putInt(tuneParam == 0 ? "vd_rel" : "vd_prs", editAngle);
+        }
+#else
+        else if (tuneServo == 1) { // Vol Down
+            preferences.putInt(tuneParam == 0 ? "vd_rel" : "vd_prs", editAngle);
+        }
+#endif
+        preferences.end();
+
         // Park the arm back at its start angle so it isn't left pressing.
         SERVOS[tuneServo].servo->write(*SERVOS[tuneServo].start);
         menuMode  = MODE_PARAMS;
@@ -622,7 +644,24 @@ static void processLine(String &line) {
 
 void setup() {
     Serial.begin(SERIAL_BAUD);
-    while (!Serial) { delay(10); }
+    // Wait for the USB host to enumerate the CDC port, but only briefly. On the
+    // XIAO's native USB, Serial never becomes ready when powered from a plain
+    // USB-C supply (no host to enumerate), so an unbounded wait would hang setup
+    // and the board would appear dead. Time out and continue after 2s.
+    unsigned long serialStart = millis();
+    while (!Serial && millis() - serialStart < 2000) { delay(10); }
+
+    // Load saved servo angles from preferences (NVS)
+    preferences.begin("servo_angles", false);
+    anglePowerReleased = preferences.getInt("p_rel", ANGLE_POWER_RELEASED);
+    anglePowerPressed  = preferences.getInt("p_prs", ANGLE_POWER_PRESSED);
+    angleVoldnReleased = preferences.getInt("vd_rel", ANGLE_VOLDN_RELEASED);
+    angleVoldnPressed  = preferences.getInt("vd_prs", ANGLE_VOLDN_PRESSED);
+#ifdef PIN_SERVO_VOLUP
+    angleVolupReleased = preferences.getInt("vu_rel", ANGLE_VOLUP_RELEASED);
+    angleVolupPressed  = preferences.getInt("vu_prs", ANGLE_VOLUP_PRESSED);
+#endif
+    preferences.end();
 
 #ifdef HAS_OLED
     Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
